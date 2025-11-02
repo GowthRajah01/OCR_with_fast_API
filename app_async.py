@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 from celery.result import AsyncResult
+from celery.exceptions import TimeoutError as CeleryTimeout
 
 from celery_app_sync import celery
 from tasks_sync import process_pdf
@@ -49,11 +50,12 @@ async def extract_batch(
     dpi: int = Query(160, ge=100, le=400),
     return_text: bool = Query(False, description="Include raw OCR text in result blob"),
     return_table_html: bool = Query(True, description="Include HTML table built from pandas"),
+    wait_seconds: int = Query(300, ge=1, le=1800, description="Max seconds to wait for all tasks"),
 ):
     """
-    1) Upload each file to Blob (async)
-    2) Enqueue a Celery job for each
-    3) Return list of {task_id, blob_path}
+    Uploads PDFs, enqueues Celery jobs for each, then waits (concurrently) up to wait_seconds
+    for each job to complete and returns their payloads inline. Tasks that don't finish in time
+    will return with status=timeout and include task_id/result_blob for later retrieval.
     """
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
@@ -77,7 +79,52 @@ async def extract_batch(
         return {"filename": f.filename, "blob_path": blob_path, "task_id": task.id}
 
     submitted = await asyncio.gather(*(store_and_enqueue(f) for f in files))
-    return JSONResponse(content={"submitted": submitted})
+    
+
+        # wait for all tasks concurrently, but don’t block one on another
+    async def wait_for(task_id: str) -> Dict[str, Any]:
+        def _get():
+            res: AsyncResult = AsyncResult(task_id)
+            try:
+                out = res.get(timeout=wait_seconds)  # blocks in a thread
+                # Expect out to include "payload" (from modified Celery task)
+                return {
+                    "task_id": task_id,
+                    "status": out.get("status", "completed"),
+                    "result_blob": out.get("result_blob"),
+                    "pages": out.get("pages"),
+                    "has_text": out.get("has_text"),
+                    "has_table_html": out.get("has_table_html"),
+                    "payload": out.get("payload"),   # structured OCR payload here
+                }
+            except CeleryTimeout:
+                # Not done in time; return minimal tracking info
+                info = res.info if isinstance(res.info, dict) else None
+                return {
+                    "task_id": task_id,
+                    "status": "timeout",
+                    "result_blob": info.get("result_blob") if info else None,
+                    "payload": None,
+                }
+            except Exception as e:
+                info = res.info if isinstance(res.info, dict) else None
+                return {
+                    "task_id": task_id,
+                    "status": "error",
+                    "error": str(e),
+                    "result_blob": info.get("result_blob") if info else None,
+                    "payload": None,
+                }
+
+        # run blocking .get() in a thread so the event loop stays free
+        return await asyncio.to_thread(_get)
+
+    results = await asyncio.gather(*(wait_for(item["task_id"]) for item in submitted))
+
+    return JSONResponse(content={
+        "submitted": submitted,  # filenames + blob paths + task_ids
+        "results": results       # each result includes the structured payload (if completed)
+    })
 
 
 @app.get("/tasks/{task_id}")
