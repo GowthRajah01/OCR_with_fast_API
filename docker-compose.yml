@@ -1,0 +1,39 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: ocr-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+
+  api:
+    build: .
+    container_name: ocr-api
+    env_file: .env
+    command: uvicorn app_async:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
+    depends_on:
+      - redis
+
+  worker:
+    build: .
+    container_name: ocr-worker
+    env_file: .env
+    command: celery -A celery_app_sync worker --loglevel=INFO --concurrency=1
+    volumes:
+      - ./:/app
+    depends_on:
+      - redis
+
+  flower:
+    build: .
+    container_name: ocr-flower
+    env_file: .env
+    command: celery -A celery_app_sync flower --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis

@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.log
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# Environment files
+.env
+.env.*
+
+# Docker
+*.pid
+*.seed
+*.log
+*.bak
+.dockerignore
+
+# VS Code
+.vscode/
+*.code-workspace
+.history/
+
+# Cache
+*.cache/
+*.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS junk
+.DS_Store
+Thumbs.db
