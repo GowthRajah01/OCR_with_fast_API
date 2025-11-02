@@ -102,6 +102,7 @@ def process_pdf(
             "pages": result_payload["pages"],
             "has_text": bool(return_text),
             "has_table_html": bool(return_table_html),
+            "payload": result_payload,
         }
     except SoftTimeLimitExceeded:
         self.update_state(state=states.FAILURE, meta={"reason": "soft_time_limit_exceeded"})
